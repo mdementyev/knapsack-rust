@@ -1,10 +1,9 @@
-use crossbeam;
 use std::io;
 use std::io::BufRead;
 extern crate num_cpus;
 
 const DEFAULT_FILENAME: &str = "input"; // Can be overridden with an argument.
-const SINGLE_THREAD: bool = false;
+const PARALLELIZE: bool = true;
 
 /// Recursive knapsack calculation routine
 ///   depth: the number of the items considered so far (the current recursion depth)
@@ -64,8 +63,8 @@ fn knapsack_parallel(
     let mut mask_b = *mask | 0x1;
 
     // Spawn A, run B synchronously.
-    crossbeam::scope(|scope| {
-        scope.spawn(|_| knapsack_parallel(limit, items, depth + 1, spawn_depth, sum, mask));
+    crossbeam::scope(|sc| {
+        sc.spawn(|_| knapsack_parallel(limit, items, depth + 1, spawn_depth, sum, mask));
         knapsack_parallel(
             limit,
             items,
@@ -118,9 +117,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut sum = 0.0;
     let mut mask = 0x0;
-    let spawn_depth = match SINGLE_THREAD {
-        false => num_cpus::get().next_power_of_two().trailing_zeros() as usize,
-        true => 0,
+    let spawn_depth = match PARALLELIZE {
+        false => 0,
+        true => num_cpus::get().next_power_of_two().trailing_zeros() as usize,
     };
     knapsack_parallel(limit, &items, 0, spawn_depth, &mut sum, &mut mask);
 

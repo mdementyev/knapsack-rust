@@ -8,3 +8,6 @@ Input file format:
 `double item[2]`  
 `...`  
 `double item[N]`
+
+### To do
+* Unit tests
