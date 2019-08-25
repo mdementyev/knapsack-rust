@@ -15,18 +15,20 @@ fn knapsack(limit: f64, items: &Vec<f64>, depth: usize, sum: &mut f64, mask: &mu
         return;
     }
 
-    *mask <<= 1;
     let mut sum_b = *sum + items[depth];
+    if sum_b > limit {
+        // Recursion pruning
+        *mask <<= items.len() - depth;
+        return;
+    }
+    *mask <<= 1;
     let mut mask_b = *mask | 0x1;
 
     knapsack(limit, items, depth + 1, sum, mask);
-
-    if sum_b <= limit {
-        knapsack(limit, items, depth + 1, &mut sum_b, &mut mask_b);
-        if *sum < sum_b {
-            *sum = sum_b;
-            *mask = mask_b;
-        }
+    knapsack(limit, items, depth + 1, &mut sum_b, &mut mask_b);
+    if sum_b > *sum {
+        *sum = sum_b;
+        *mask = mask_b;
     }
 }
 
@@ -52,14 +54,16 @@ fn knapsack_parallel(
         return;
     }
 
-    *mask <<= 1;
     let mut sum_b = *sum + items[depth];
-    let mut mask_b = *mask | 0x1;
     if sum_b > limit {
-        knapsack_parallel(limit, items, depth + 1, spawn_depth, sum, mask);
+        // Recursion pruning
+        *mask <<= items.len() - depth;
         return;
     }
+    *mask <<= 1;
+    let mut mask_b = *mask | 0x1;
 
+    // Spawn A, run B synchronously.
     crossbeam::scope(|scope| {
         scope.spawn(|_| knapsack_parallel(limit, items, depth + 1, spawn_depth, sum, mask));
         knapsack_parallel(
@@ -73,7 +77,7 @@ fn knapsack_parallel(
     })
     .expect("Thread error");
 
-    if *sum < sum_b {
+    if sum_b > *sum {
         *sum = sum_b;
         *mask = mask_b;
     }
