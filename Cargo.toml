@@ -5,3 +5,5 @@ authors = ["Dante"]
 edition = "2018"
 
 [dependencies]
+crossbeam = "0.7.2"
+num_cpus = "0.2.0"

@@ -1,16 +1,15 @@
-use std::env;
-use std::fs;
+use crossbeam;
 use std::io;
 use std::io::BufRead;
-use std::mem;
+extern crate num_cpus;
 
-const DEFAULT_FILENAME: &str = "input"; // May be overridden with an argument.
+const DEFAULT_FILENAME: &str = "input"; // Can be overridden with an argument.
+const SINGLE_THREAD: bool = false;
 
 /// Recursive knapsack calculation routine
-///   depth: the number of the items considered so far (the depth of recursion)
+///   depth: the number of the items considered so far (the current recursion depth)
 ///   sum: the sum of the taken items among considered
 ///   mask: the bit mask of the taken items
-///   returns the best sum for this branch and updates the mask
 fn knapsack(limit: f64, items: &Vec<f64>, depth: usize, sum: &mut f64, mask: &mut usize) {
     if depth == items.len() {
         return;
@@ -19,7 +18,9 @@ fn knapsack(limit: f64, items: &Vec<f64>, depth: usize, sum: &mut f64, mask: &mu
     *mask <<= 1;
     let mut sum_b = *sum + items[depth];
     let mut mask_b = *mask | 0x1;
+
     knapsack(limit, items, depth + 1, sum, mask);
+
     if sum_b <= limit {
         knapsack(limit, items, depth + 1, &mut sum_b, &mut mask_b);
         if *sum < sum_b {
@@ -29,14 +30,66 @@ fn knapsack(limit: f64, items: &Vec<f64>, depth: usize, sum: &mut f64, mask: &mu
     }
 }
 
+/// Parallel version of the knapsack calculation routine
+///   depth: the number of the items considered so far (the current recursion depth)
+///   spawn_depth: the maximum depth of recursive thread spawning
+///   sum: the sum of the taken items among considered
+///   mask: the bit mask of the taken items
+fn knapsack_parallel(
+    limit: f64,
+    items: &Vec<f64>,
+    depth: usize,
+    spawn_depth: usize,
+    sum: &mut f64,
+    mask: &mut usize,
+) {
+    if depth == items.len() {
+        return;
+    }
+    if depth == spawn_depth {
+        // No more branching.
+        knapsack(limit, items, depth, sum, mask);
+        return;
+    }
+
+    *mask <<= 1;
+    let mut sum_b = *sum + items[depth];
+    let mut mask_b = *mask | 0x1;
+    if sum_b > limit {
+        knapsack_parallel(limit, items, depth + 1, spawn_depth, sum, mask);
+        return;
+    }
+
+    crossbeam::scope(|scope| {
+        scope.spawn(|_| knapsack_parallel(limit, items, depth + 1, spawn_depth, sum, mask));
+        knapsack_parallel(
+            limit,
+            items,
+            depth + 1,
+            spawn_depth,
+            &mut sum_b,
+            &mut mask_b,
+        );
+    })
+    .expect("Thread error");
+
+    if *sum < sum_b {
+        *sum = sum_b;
+        *mask = mask_b;
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let filename = env::args().nth(1).unwrap_or(String::from(DEFAULT_FILENAME));
+    let filename = std::env::args()
+        .nth(1)
+        .unwrap_or(String::from(DEFAULT_FILENAME));
     println!("Running '{}'...", filename);
 
     let limit: f64;
     let mut items: Vec<f64>;
+
     {
-        let file = fs::File::open(&filename)?;
+        let file = std::fs::File::open(&filename)?;
         let lines = io::BufReader::new(file).lines().flat_map(|l| l);
         let mut numbers = lines
             .flat_map(|l| l.parse::<f64>())
@@ -47,23 +100,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))?;
         items = numbers.collect();
     } // Drop file.
-    if items.len() > 8 * mem::size_of::<usize>() {
+
+    let max_items = 8 * std::mem::size_of::<usize>();
+    if items.len() > max_items {
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!(
-                "{} items found; can use {} at most",
-                items.len(),
-                8 * mem::size_of::<usize>()
-            ),
+            format!("{} items found; can use {} at most", items.len(), max_items),
         ))?;
     }
     // Keeping bigger items at the end allows pruning at the later stages,
-    // thus balancing the tree traversal
+    // thus balancing the recursion tree
     items.sort_unstable_by(|x, y| x.partial_cmp(y).unwrap()); // No NaNs by now.
 
-    let mut sum: f64 = 0.0;
-    let mut mask: usize = 0;
-    knapsack(limit, &items, 0, &mut sum, &mut mask);
+    let mut sum = 0.0;
+    let mut mask = 0x0;
+    let spawn_depth = match SINGLE_THREAD {
+        false => num_cpus::get().next_power_of_two().trailing_zeros() as usize,
+        true => 0,
+    };
+    knapsack_parallel(limit, &items, 0, spawn_depth, &mut sum, &mut mask);
 
     println!("Sum: {} / {}", sum, limit);
     println!("Used items: {} / {}", mask.count_ones(), items.len());
